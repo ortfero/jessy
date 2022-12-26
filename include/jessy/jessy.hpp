@@ -58,29 +58,24 @@ namespace jessy {
                 return {"unknown"};
         }
     }
-    
+        
     
     class document;
     class value {
     friend class document;
         yyjson_val* val_;
         
-        value(yyjson_val* val) noexcept: val_{val} { }
+        explicit value(yyjson_val* val) noexcept: val_{val} { }
         
     public:
+    
+        using size_type = std::size_t;
+        class array_iterator;
+
     
         value() = delete;
         value(value const&) = default;
         value& operator = (value const&) = default;
-        
-        
-        template<std::size_t N>
-        value operator [](char const (&key)[N]) const noexcept {
-            auto* val = yyjson_obj_getn(val_, key, N - 1);
-            if(!val)
-                return value{&detail::null_value};
-            return value{val};
-        }
         
         
         bool is_null() const noexcept {
@@ -100,6 +95,19 @@ namespace jessy {
             return (value_type)(val_->tag & (YYJSON_TYPE_MASK | YYJSON_SUBTYPE_MASK));
         }
         
+        
+        size_type size() const noexcept;
+        array_iterator begin() const noexcept;
+        array_iterator end() const noexcept;
+                
+        template<std::size_t N>
+        value operator [](char const (&key)[N]) const noexcept {
+            auto* val = yyjson_obj_getn(val_, key, N - 1);
+            if(!val)
+                return value{&detail::null_value};
+            return value{val};
+        }
+                
         
         std::optional<bool> as_bool() const noexcept {
             if(!unsafe_yyjson_is_bool(val_))
@@ -141,7 +149,7 @@ namespace jessy {
         }
 
 
-        std::optional<std::string_view> as_string_view() const noexcept {
+        std::optional<std::string_view> as_string() const noexcept {
             if(!unsafe_yyjson_is_str(val_))
                 return std::nullopt;
             return {std::string_view{unsafe_yyjson_get_str(val_),
@@ -149,6 +157,69 @@ namespace jessy {
         }
         
     }; // value
+    
+    
+    class value::array_iterator {
+    friend class value;
+        value current_{nullptr};
+        yyjson_arr_iter iter_;
+        
+        array_iterator() noexcept = default;
+        
+        array_iterator(yyjson_val* parent) noexcept {
+            yyjson_arr_iter_init(parent, &iter_);
+            current_ = value{yyjson_arr_iter_next(&iter_)};
+        }
+        
+    public:
+        
+        array_iterator(array_iterator const&) = default;
+        array_iterator& operator = (array_iterator const&) = default;
+        
+        bool operator == (array_iterator const& other) noexcept {
+            return current_.val_ == other.current_.val_;
+        }
+                    
+        bool operator != (array_iterator const& other) noexcept {
+            return current_.val_ != other.current_.val_;
+        }
+        
+        array_iterator& operator ++ () noexcept {
+            current_ = value{yyjson_arr_iter_next(&iter_)};
+            return *this;
+        }
+                
+        array_iterator operator ++ (int) noexcept {
+            auto const previous = *this;
+            current_ = value{yyjson_arr_iter_next(&iter_)};
+            return previous;
+        }
+        
+        value const* operator -> () const noexcept {
+            return &current_;
+        }
+        
+        
+        value const& operator * () const noexcept {
+            return current_;
+        }        
+    }; // value::array_iterator
+    
+    
+    inline value::size_type value::size() const noexcept {
+        return yyjson_arr_size(val_);
+    }
+    
+    
+    inline value::array_iterator value::begin() const noexcept {
+        return value::array_iterator{val_};
+    }
+    
+    
+    inline value::array_iterator value::end() const noexcept {
+        return array_iterator{};
+    }
+
     
     
     class document {

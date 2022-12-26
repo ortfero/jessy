@@ -33,6 +33,7 @@ TEST_SUITE("jessy") {
     
     SCENARIO("int") {
         auto const maybe_doc = jessy::document::read("{ \"x\": 42, \"y\": \"\" }");
+        REQUIRE(maybe_doc);
         auto const x_val = maybe_doc->root["x"];        
         REQUIRE_EQ(x_val.type(), jessy::value_type::uinteger);
         auto const maybe_x = x_val.as_int();
@@ -47,11 +48,25 @@ TEST_SUITE("jessy") {
     
     SCENARIO("double") {
         auto const maybe_doc = jessy::document::read("{ \"x\": 42.3 }");
+        REQUIRE(maybe_doc);
         auto const x_val = maybe_doc->root["x"];
         REQUIRE_EQ(x_val.type(), jessy::value_type::floating);        
         auto const maybe_x = x_val.as_double();
         REQUIRE(maybe_x);
         REQUIRE_EQ(*maybe_x, 42.3);
+    }
+    
+    
+    SCENARIO("array") {
+        auto const maybe_doc = jessy::document::read("[ 1, 2, 3 ]");
+        REQUIRE(maybe_doc);
+        auto sum = 0;
+        for(auto const& v: maybe_doc->root) {
+            auto const maybe_int = v.as_int();
+            if(maybe_int)
+                sum += *maybe_int;
+        }
+        REQUIRE_EQ(sum, 6);
     }
     
 }
