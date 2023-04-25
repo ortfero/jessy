@@ -1,267 +1,799 @@
 // This file is part of jessy library
-// Copyright 2022 Andrei Ilin <ortfero@gmail.com>
+// Copyright 2023 Andrei Ilin <ortfero@gmail.com>
 // SPDX-License-Identifier: MIT
 
 #pragma once
 
 
+#include <charconv>
 #include <cstdint>
 #include <optional>
 #include <string_view>
-
-#include <yyjson.h>
+#include <vector>
 
 
 namespace jessy {
-    
-    namespace detail {
-        
-        inline yyjson_val null_value = yyjson_val {
-            .tag = YYJSON_TYPE_NULL,
-            .uni = yyjson_val_uni{}
-        };
-        
-    } // namespace detail
-    
-    
-    enum class value_type {
-        null = YYJSON_TYPE_NULL,
-        boolean = YYJSON_TYPE_BOOL,
-        uinteger = (YYJSON_TYPE_NUM | YYJSON_SUBTYPE_UINT),
-        integer = (YYJSON_TYPE_NUM | YYJSON_SUBTYPE_SINT),
-        floating = (YYJSON_TYPE_NUM | YYJSON_SUBTYPE_REAL),
-        string = YYJSON_TYPE_STR,
-        array = YYJSON_TYPE_ARR,
-        object = YYJSON_TYPE_OBJ
-    }; // value_type
-    
-    
-    inline std::string_view constexpr entitle(value_type type) noexcept {
-        switch(type) {
-            case value_type::null:
-                return {"null"};
-            case value_type::boolean:
-                return {"boolean"};
-            case value_type::integer:
-                return {"integer"};
-            case value_type::uinteger:
-                return {"unsigned"};
-            case value_type::floating:
-                return {"double"};
-            case value_type::string:
-                return {"string"};
-            case value_type::array:
-                return {"array"};
-            case value_type::object:
-                return {"object"};
-            default:
-                return {"unknown"};
-        }
-    }
-        
-    
-    class document;
-    class value {
-    friend class document;
-        yyjson_val* val_;
-        
-        explicit value(yyjson_val* val) noexcept: val_{val} { }
-        
-    public:
-    
-        using size_type = std::size_t;
-        class array_iterator;
+	
 
-    
-        value() = delete;
-        value(value const&) = default;
-        value& operator = (value const&) = default;
-        
-        
-        bool is_null() const noexcept {
-            return unsafe_yyjson_is_null(val_);
-        }
-        
-        bool is_object() const noexcept {
-            return unsafe_yyjson_is_obj(val_);
-        }
-        
-        bool is_array() const noexcept {
-            return unsafe_yyjson_is_arr(val_);
-        }
-        
-        
-        value_type type() const noexcept {
-            return (value_type)(val_->tag & (YYJSON_TYPE_MASK | YYJSON_SUBTYPE_MASK));
-        }
-        
-        
-        size_type size() const noexcept;
-        array_iterator begin() const noexcept;
-        array_iterator end() const noexcept;
-                
-        template<std::size_t N>
-        value operator [](char const (&key)[N]) const noexcept {
-            auto* val = yyjson_obj_getn(val_, key, N - 1);
-            if(!val)
-                return value{&detail::null_value};
-            return value{val};
-        }
-                
-        
-        std::optional<bool> as_bool() const noexcept {
-            if(!unsafe_yyjson_is_bool(val_))
-                return std::nullopt;
-            return {unsafe_yyjson_get_bool(val_)};
-        }
+	enum class value_type: char {
+		null, boolean, number, string, object, array
+	}; // value_type
+	
+	
+	inline constexpr std::string_view entitle(value_type type) noexcept {
+		switch(type) {
+			case value_type::null:
+				return "null";
+			case value_type::boolean:
+				return "boolean";
+			case value_type::number:
+				return "number";
+			case value_type::string:
+				return "string";
+			case value_type::object:
+				return "object";
+			case value_type::array:
+				return "array";
+			default:
+				return "unknown";
+		}
+	}
+	
+	template<unsigned Bits> struct value_tag_bits;
+	
+	template<> struct value_tag_bits<4> {
+		
+		using length_type = std::uint32_t;
+		
+		value_type type:8;
+		length_type length:24;
+	}; // value_tag_bits<4>
+	static_assert(sizeof(value_tag_bits<4>) == 4, "value_tag_bits<4> should be 32 bits");
+	
+	template<> struct value_tag_bits<8> {
+		
+		using length_type = std::uint64_t;
+		
+		value_type type:8;
+		length_type length:56;
+	}; // value_tag_bits<8>
+	static_assert(sizeof(value_tag_bits<8>) == 8, "value_tag_bits<8> should be 64 bits");
+	
+	using value_tag = value_tag_bits<sizeof(std::size_t)>;
+	
+
+	union value_data {
+		
+		using count_type = value_tag::length_type;
+		
+		bool boolean;
+		char const* text;
+		count_type count;
+		
+		constexpr value_data() noexcept: count{0} { }
+		constexpr value_data(bool value) noexcept: boolean{value} { }
+		constexpr value_data(char const* text) noexcept: text{text} { }
+	}; // value_data
+	
+	
+	class parser;
+	class value {
+	friend class parser;
+	
+		value_tag tag_{value_type::null, 0u};
+		value_data data_;
+		
+		static const value null;
+		
+		static value const* next_of(value const* it) noexcept {
+			switch(it->tag_.type) {
+				case value_type::array:
+				case value_type::object:
+					return it + it->data_.count + 1;
+				default:
+					return it + 1;
+			}
+		}
+		
+	public:
+	
+		class array {
+		friend class value;
+		
+			value_tag::length_type length_;
+			value const* begin_;
+			value const* end_;
+			
+		public:
+			using size_type = value_tag::length_type;
+			
+			class const_iterator {
+			friend class array;
+				value const* it_;
+			public:
+			
+				const_iterator(const_iterator const&) = default;
+				const_iterator& operator = (const const_iterator&) = default;
+				
+				bool operator == (const_iterator const& other) const noexcept {
+					return it_ == other.it_;
+				}
+				
+				bool operator != (const_iterator const& other) const noexcept {
+					return it_ != other.it_;
+				}
+				
+				value const& operator * () const noexcept {
+					return *it_;
+				}
+				
+				value const* operator -> () const noexcept {
+					return it_;
+				}
+				
+				const_iterator& operator ++ () noexcept {
+					it_ = next_of(it_);
+					return *this;
+				}
+				
+				const_iterator operator ++ (int) noexcept {
+					auto const me{*this};
+					++(*this);
+					return me;
+				}
+					
+			private:
+			
+				explicit const_iterator(value const* it) noexcept
+				: it_{it} { }
+				
+			}; // const_iterator
+		
+			array(array const&) = default;
+			array& operator = (array const&) = default;
+			size_type size() const noexcept { return length_; }
+			bool empty() const noexcept { return begin_ == end_; }
+			
+			const_iterator begin() const noexcept {
+				return const_iterator{begin_};
+			}
+			
+			const_iterator end() const noexcept {
+				return const_iterator{end_};
+			}
+			
+		private:
+		
+			array(value_tag::length_type length,
+			      value const* begin,
+				  value const* end) noexcept
+			: length_{length}, begin_{begin}, end_{end} { }
+		
+		}; // array
+		
+		
+		class object {
+		friend class value;
+		
+			value_tag::length_type length_;
+			value const* begin_;
+			value const* end_;
+			
+		public:
+			using size_type = value_tag::length_type;
+			
+			class const_iterator {
+			friend class object;
+				value const* key_;
+				value const* value_;
+			public:
+			
+				const_iterator(const_iterator const&) = default;
+				const_iterator& operator = (const const_iterator&) = default;
+				
+				bool operator == (const_iterator const& other) const noexcept {
+					return key_ == other.key_;
+				}
+				
+				bool operator != (const_iterator const& other) const noexcept {
+					return key_ != other.key_;
+				}
+				
+				std::string_view key() const noexcept {
+					return std::string_view{key_->data_.text,
+					                        std::size_t(key_->tag_.length)};
+				}
+				
+				value const& operator * () const noexcept {
+					return *value_;
+				}
+				
+				value const* operator -> () const noexcept {
+					return value_;
+				}
+				
+				const_iterator& operator ++ () noexcept {
+					key_ = next_of(value_);
+					value_ = key_ + 1;
+					return *this;
+				}
+				
+				const_iterator operator ++ (int) noexcept {
+					auto const me{*this};
+					++(*this);
+					return me;
+				}
+				
+			private:
+			
+				explicit const_iterator(class value const* it) noexcept
+				: key_{it}, value_{it + 1} { }
+				
+			}; // const_iterator
+		
+			object(object const&) = default;
+			object& operator = (object const&) = default;
+			size_type size() const noexcept { return length_; }
+			bool empty() const noexcept { return begin_ == end_; }
+			
+			const_iterator begin() const noexcept {
+				return const_iterator{begin_};
+			}
+			
+			const_iterator end() const noexcept {
+				return const_iterator{end_};
+			}
+			
+			const_iterator find(const_iterator from, std::string_view name) const noexcept {
+				auto const* it = from.key_;
+				while(it != end_) {
+					auto const key = std::string_view{it->data_.text,
+					                                  std::size_t(it->tag_.length)};
+					if(key == name)
+						return const_iterator{it};
+					it = next_of(it + 1);
+				}
+				if(from.key_ == begin_)
+					return const_iterator{end_};
+				it = begin_;
+				while(it != from.key_) {
+					auto const key = std::string_view{it->data_.text,
+					                                  std::size_t(it->tag_.length)};
+					if(key == name)
+						return const_iterator{it};
+					it = next_of(it + 1);
+				}
+				return const_iterator{end_};
+			}
+			
+		private:
+		
+			object(value_tag::length_type length,
+			      value const* begin,
+				  value const* end) noexcept
+			: length_{length}, begin_{begin}, end_{end} { }
+		}; // object
+	
+	
+		constexpr value() = default;
+		constexpr value(value const&) = default;
+		constexpr value& operator = (value const&) = default;
+		
+		constexpr value(bool v)
+		: tag_{value_type::boolean, 0u}, data_{v} { }
+		
+		constexpr value(value_type type)
+		: tag_{type, 0u} { }
+		
+		constexpr value(value_type type,
+		                char const* text,
+						value_tag::length_type length)
+		: tag_{type, length}, data_{text} { }
+		
+		constexpr void members_info(value_tag::length_type length,
+		                            value_data::count_type count) {
+			tag_.length = length;
+			data_.count = count;
+		}
+
+		
+		constexpr value_type type() const noexcept {
+			return tag_.type;
+		}
+		
+		
+		constexpr bool is_null() const noexcept {
+			return tag_.type == value_type::null;
+		}		
+		
+		
+		std::optional<bool> as_bool() const noexcept {
+			if(tag_.type != value_type::boolean)
+				return std::nullopt;
+			return {data_.boolean};
+		}
+		
+		
+		std::optional<std::int64_t> as_int() const noexcept {
+			if(tag_.type != value_type::number)
+				return std::nullopt;
+			auto result = 0ll;
+			auto const converted = std::from_chars(data_.text,
+			                                       data_.text + tag_.length,
+												   result);
+			if(converted.ec != std::errc{})
+				return std::nullopt;
+			return {result};
+		}
+		
+		
+		std::optional<std::uint64_t> as_uint() const noexcept {
+			if(tag_.type != value_type::number)
+				return std::nullopt;
+			auto result = 0ull;
+			auto const converted = std::from_chars(data_.text,
+			                                       data_.text + tag_.length,
+												   result);
+			if(converted.ec != std::errc{})
+				return std::nullopt;
+			return {result};
+		}
+		
+		
+		std::optional<double> as_double() const noexcept {
+			if(tag_.type != value_type::number)
+				return std::nullopt;
+			auto result = 0.0;
+			auto const converted = std::from_chars(data_.text,
+			                                       data_.text + tag_.length,
+												   result);
+			if(converted.ec != std::errc{})
+				return std::nullopt;
+			return {result};
+		}
+		
+		
+		std::optional<std::string_view> as_string() const noexcept {
+			if(tag_.type != value_type::string)
+				return std::nullopt;
+			return {std::string_view{data_.text, std::size_t(tag_.length)}};
+		}
+		
+		
+		std::optional<array> as_array() const noexcept {
+			if(tag_.type != value_type::array)
+				return std::nullopt;
+			return {array{tag_.length, this + 1, this + data_.count + 1}};
+		}
+		
+		std::optional<object> as_object() const noexcept {
+			if(tag_.type != value_type::object)
+				return std::nullopt;
+			return {object{tag_.length, this + 1, this + data_.count + 1}};
+		}
+						
+	}; // value
+	
+	
+	inline constexpr value value::null;
+	
+	
+	enum result {
+		ok,
+		incomplete_json,
+		illformed_json,
+		number_is_out_of_range,
+		invalid_number,
+		unclosed_string,
+		invalid_escape_sequence
+	}; // result
+	
+	
+	inline constexpr std::string_view entitle(result r) {
+		switch(r) {
+			case result::ok:
+				return "None";
+			case result::incomplete_json:
+				return "Incomplete JSON";
+			case result::illformed_json:
+				return "Illformed JSON";
+			case result::number_is_out_of_range:
+				return "Number is out of range";
+			case result::invalid_number:
+				return "Invalid number";
+			case result::unclosed_string:
+				return "Unclosed string";
+			case result::invalid_escape_sequence:
+				return "Invalid escape sequence";
+			default:
+				return "Unknown";			
+		}
+	}
+	
+	
+	class parser {
+		
+		std::string buffer_;
+		std::vector<value> values_;
+		char* cursor_{nullptr};
+		
+	public:
+	
+		using size_type = std::size_t;
+	
+		parser() = default;
+		parser(parser const&) = default;
+		parser& operator = (parser const&) = default;
+		
+		explicit parser(size_type reserve_tokens, size_type buffer_size) {
+			values_.reserve(reserve_tokens);
+			buffer_.reserve(buffer_size);
+		}
+		
+		
+		void clear() {
+			buffer_.clear();
+			values_.clear();
+			cursor_ = nullptr;
+		}
+		
+		
+		result parse(std::string_view text) {
+			buffer_ = text;
+			cursor_ = buffer_.data();
+			return parse_value();
+		}
+		
+		
+		value const* root() const noexcept {
+			if(values_.empty())
+				return &value::null;
+			return &values_.front();
+		}
+		
+	private:
+	
+	
+		static bool is_digit(char c) {
+			constexpr auto t = true;
+			constexpr auto f = false;
+			static constexpr bool map[] = {
+				 f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,
+				 f,f,f,f,f,f,f,f,f,f,t,t,t,t,t,t,t,t,t,t,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,
+				 f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,
+				 f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,
+				 f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,
+				 f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,
+				 f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f
+			};
+			static_assert(sizeof(map) == 256, "Invalid digits map");
+			return map[unsigned(c)];
+		}
+	
+	
+		result parse_value() {
+			switch(skip()) {
+				case '{':
+					return parse_object();
+				case '[':
+					return parse_array();
+				case '"':
+					return parse_string();
+				case 'n':
+					return parse_null();
+				case 't':
+					return parse_true();
+				case 'f':
+					return parse_false();
+				case '-':
+					if(!is_digit(cursor_[1]))
+						return result::illformed_json;
+					return parse_number();
+				case '0': case '1': case '2': case '3': case '4':
+				case '5': case '6': case '7': case '8': case '9':
+					return parse_number();
+				case '\0':
+					return result::incomplete_json;
+				default:
+					return result::illformed_json;
+			}
+		}
+		
+		
+		char skip() {
+			constexpr auto t = true;
+			constexpr auto f = false;
+			static constexpr bool map[] = {
+				 f,f,f,f,f,f,f,f,f,t,t,f,f,t,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,t,f,f,f,f,
+				 f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,
+				 f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,
+				 f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,
+				 f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,
+				 f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,
+				 f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f
+			};
+			static_assert(sizeof(map) == 256, "Invalid whitespace map");
+			while(map[unsigned(*cursor_)])
+				++cursor_;
+			return *cursor_;
+		}
+		
+		
+		result parse_object() {
+			values_.emplace_back(value_type::object);
+			auto const original_size = values_.size();
+			++cursor_;
+			auto length = value_tag::length_type(0);
+			if(skip() != '}')
+				for(;;) {
+					if(*cursor_ != '\"')
+						return result::illformed_json;
+					parse_string();
+					if(skip() != ':')
+						return result::illformed_json;
+					++cursor_;
+					auto const e = parse_value();
+					if(e != result::ok)
+						return e;
+					++length;
+					auto const delim = skip();
+					if(delim == ',') {
+						++cursor_;
+						skip();
+						continue;
+					}
+					if(delim != '}')
+						return result::illformed_json;
+					break;
+				}
+			++cursor_;
+			values_[original_size - 1].members_info(length,
+			                                        values_.size() - original_size);
+			return result::ok;
+		}
+		
+		
+		result parse_array() {
+			values_.emplace_back(value_type::array);
+			auto const original_size = values_.size();
+			++cursor_;
+			auto length = value_tag::length_type(0);
+			if(skip() != ']')				
+				for(;;) {
+					auto const e = parse_value();
+					if(e != result::ok)
+						return e;
+					++length;
+					auto const delim = skip();
+					if(delim == ',') {
+						++cursor_;
+						continue;
+					}
+					if(delim != ']')
+						return result::illformed_json;
+					break;
+				}
+			++cursor_;
+			values_[original_size - 1].members_info(length,
+			                                        values_.size() - original_size);
+			return result::ok;
+		}
+		
+		
+		result parse_string() {
+			auto const* mark = ++cursor_;
+			for(;;)
+				switch(*cursor_) {
+					case '\n':
+					case '\0':
+						return result::unclosed_string;
+					case '\\':
+						return parse_escaped_string(mark);
+					case '"':
+						values_.emplace_back(value_type::string,
+						                     mark,
+											 value_tag::length_type(cursor_ - mark));
+						++cursor_;
+						return result::ok;
+					default:
+						++cursor_;
+						continue;
+				}
+		}
+		
+		
+		result parse_escaped_string(char const* mark) {
+			auto* p = cursor_;
+			auto escape = parse_escaped_character(p);
+			if(escape != result::ok)
+				return escape;
+			for(;;)
+				switch(*cursor_) {
+					case '\n':
+					case '\0':
+						return result::unclosed_string;
+					case '\\':
+						escape = parse_escaped_character(p);
+						if(escape !=  result::ok)
+							return escape;
+						continue;
+					case '"':
+						values_.emplace_back(value_type::string,
+						                     mark,
+											 value_tag::length_type(p - mark));
+						++cursor_;
+						return result::ok;
+					default:
+						*p++ = *cursor_++;
+						continue;
+				}
+		}
+		
+		
+		static std::uint16_t hex_digit(char c) noexcept {
+			switch(c) {
+				case '0': return 0;
+				case '1': return 1;
+				case '2': return 2;
+				case '3': return 3;
+				case '4': return 4;
+				case '5': return 5;
+				case '6': return 6;
+				case '7': return 7;
+				case '8': return 8;
+				case '9': return 9;
+				case 'a': case 'A': return 10;
+				case 'b': case 'B': return 11;
+				case 'c': case 'C': return 12;
+				case 'd': case 'D': return 13;
+				case 'e': case 'E': return 14;
+				case 'f': case 'F': return 15;
+				default: return 16;
+			}
+		}
+		
+		
+		result parse_code_point(char*& p) noexcept {
+			++cursor_;
+			auto const q1 = hex_digit(*cursor_);
+			if(q1 == 16)
+				return result::invalid_escape_sequence;
+			++cursor_;
+			auto const q2 = hex_digit(*cursor_);
+			if(q2 == 16)
+				return result::invalid_escape_sequence;
+			++cursor_;
+			auto const q3 = hex_digit(*cursor_);
+			if(q3 == 16)
+				return result::invalid_escape_sequence;
+			++cursor_;
+			auto const q4 = hex_digit(*cursor_);
+			if(q4 == 16)
+				return result::invalid_escape_sequence;
+			++cursor_;
+			auto const cp = std::uint16_t((q1 << 12) | (q2 << 8) | (q3 << 4) | q4);
+			if(cp <= 0x7F) {
+				*p++ = char(cp);
+			} else if(cp <= 0x7FF) {
+				*p++ = char(0xC0 | (cp >> 6));
+				*p++ = 0x80 | (cp & 0x3F);
+			} else {
+				*p++ = char(0xE0 | (cp >> 12));
+				*p++ = char(0x80 | ((cp >> 6) & 0x3F));
+				*p++ = char(0x80 | (cp & 0x3F));
+			}
+			return result::ok;
+		}
 
 
-        std::optional<std::int64_t> as_int() const noexcept {
-            switch(val_->tag & (YYJSON_TYPE_MASK | YYJSON_SUBTYPE_MASK)) {
-                case YYJSON_TYPE_NUM | YYJSON_SUBTYPE_UINT:
-                    return static_cast<std::int64_t>(unsafe_yyjson_get_uint(val_));
-                case YYJSON_TYPE_NUM | YYJSON_SUBTYPE_SINT:
-                    return unsafe_yyjson_get_sint(val_);
-                default:
-                    return std::nullopt;
-            }
-        }
-
-
-        std::optional<std::uint64_t> as_uint() const noexcept {
-            if(!unsafe_yyjson_is_uint(val_))
-                return std::nullopt;
-            return {unsafe_yyjson_get_uint(val_)};
-        }
-
-
-        std::optional<double> as_double() const noexcept {
-            switch(val_->tag & (YYJSON_TYPE_MASK | YYJSON_SUBTYPE_MASK)) {
-                case YYJSON_TYPE_NUM | YYJSON_SUBTYPE_UINT:
-                    return static_cast<double>(unsafe_yyjson_get_uint(val_));
-                case YYJSON_TYPE_NUM | YYJSON_SUBTYPE_SINT:
-                    return static_cast<double>(unsafe_yyjson_get_sint(val_));
-                case YYJSON_TYPE_NUM | YYJSON_SUBTYPE_REAL:
-                    return unsafe_yyjson_get_real(val_);
-                default:
-                    return std::nullopt;
-            }
-        }
-
-
-        std::optional<std::string_view> as_string() const noexcept {
-            if(!unsafe_yyjson_is_str(val_))
-                return std::nullopt;
-            return {std::string_view{unsafe_yyjson_get_str(val_),
-                                     unsafe_yyjson_get_len(val_)}};
-        }
-        
-    }; // value
-    
-    
-    class value::array_iterator {
-    friend class value;
-        value current_{nullptr};
-        yyjson_arr_iter iter_;
-        
-        array_iterator() noexcept = default;
-        
-        array_iterator(yyjson_val* parent) noexcept {
-            yyjson_arr_iter_init(parent, &iter_);
-            current_ = value{yyjson_arr_iter_next(&iter_)};
-        }
-        
-    public:
-        
-        array_iterator(array_iterator const&) = default;
-        array_iterator& operator = (array_iterator const&) = default;
-        
-        bool operator == (array_iterator const& other) noexcept {
-            return current_.val_ == other.current_.val_;
-        }
-                    
-        bool operator != (array_iterator const& other) noexcept {
-            return current_.val_ != other.current_.val_;
-        }
-        
-        array_iterator& operator ++ () noexcept {
-            current_ = value{yyjson_arr_iter_next(&iter_)};
-            return *this;
-        }
-                
-        array_iterator operator ++ (int) noexcept {
-            auto const previous = *this;
-            current_ = value{yyjson_arr_iter_next(&iter_)};
-            return previous;
-        }
-        
-        value const* operator -> () const noexcept {
-            return &current_;
-        }
-        
-        
-        value const& operator * () const noexcept {
-            return current_;
-        }        
-    }; // value::array_iterator
-    
-    
-    inline value::size_type value::size() const noexcept {
-        return yyjson_arr_size(val_);
-    }
-    
-    
-    inline value::array_iterator value::begin() const noexcept {
-        return value::array_iterator{val_};
-    }
-    
-    
-    inline value::array_iterator value::end() const noexcept {
-        return array_iterator{};
-    }
-
-    
-    
-    class document {
-        yyjson_doc* doc_;
-        
-        document(yyjson_doc* doc) noexcept: doc_{doc}, root{doc->root} { }
-        
-    public:
-    
-        value root;
-    
-        static std::optional<document> read(std::string_view view) noexcept {
-            auto* doc = yyjson_read(view.data(), view.size(), 0);
-            if(!doc)
-                return std::nullopt;
-            return document{doc};
-        }
-
-    
-        document() = delete;
-        document(document const&) = delete;
-        document& operator = (document const&) = delete;
-        
-        ~document() {
-            yyjson_doc_free(doc_);
-        }
-        
-        
-        document(document&& other) noexcept: doc_{other.doc_}, root{other.root} {
-            other.doc_ = nullptr;
-        }
-        
-        
-        document& operator = (document&& other) noexcept {
-            yyjson_doc_free(doc_);
-            doc_ = other.doc_;
-            other.doc_ = nullptr;
-            root = other.root;
-            return *this;
-        }
-            
-    }; // document
-    
-    
+		result parse_escaped_character(char*& p) noexcept {
+			++cursor_;
+			switch(*cursor_) {
+				case '"':
+					*p++ = '"';
+					++cursor_;
+					return result::ok;
+				case '\\':
+					*p++ = '\\';
+					++cursor_;
+					return result::ok;
+				case '/':
+					*p++ = '/';
+					++cursor_;
+					return result::ok;
+				case 'b':
+					*p++ = '\b';
+					++cursor_;
+					return result::ok;
+				case 'f':
+					*p++ = '\f';
+					++cursor_;
+					return result::ok;
+				case 'n':
+					*p++ = '\n';
+					++cursor_;
+					return result::ok;
+				case 'r':
+					*p++ = '\r';
+					++cursor_;
+					return result::ok;
+				case 't':
+					*p++ = '\t';
+					++cursor_;
+					return result::ok;
+				case 'u':
+					return parse_code_point(p);
+				default:
+					return result::invalid_escape_sequence;
+			}
+		}
+		
+		
+		result parse_null() {
+			auto const is_null = cursor_[1] == 'u'
+				&& cursor_[2] == 'l'
+				&& cursor_[3] == 'l';
+			if(!is_null)
+				return result::illformed_json;
+			cursor_ += 4;
+			values_.push_back(value::null);
+			return result::ok;
+		}
+		
+		
+		result parse_true() {
+			auto const is_true = cursor_[1] == 'r'
+				&& cursor_[2] == 'u'
+				&& cursor_[3] == 'e';
+			if(!is_true)
+				return result::illformed_json;
+			cursor_ += 4;
+			values_.emplace_back(true);
+			return result::ok;
+		}
+		
+		
+		result parse_false() {
+			auto const is_false = cursor_[1] == 'a'
+				&& cursor_[2] == 'l'
+				&& cursor_[3] == 's'
+				&& cursor_[4] == 'e';
+			if(!is_false)
+				return result::illformed_json;
+			cursor_ += 5;
+			values_.emplace_back(false);
+			return result::ok;
+		}
+		
+		
+		result parse_number() {
+			auto const* mark = cursor_++;
+			while(is_digit(*cursor_))
+				++cursor_;
+			if(*cursor_ == '.') {
+				++cursor_;
+				if(!is_digit(*cursor_))
+					return result::invalid_number;
+				++cursor_;
+				while(is_digit(*cursor_))
+					++cursor_;
+			}
+			if(*cursor_ == 'e' || *cursor_ == 'E') {
+				++cursor_;
+				if(*cursor_ == '+' || *cursor_ == '-') {
+					++cursor_;
+				}
+				if(!is_digit(*cursor_))
+					return result::invalid_number;
+				while(is_digit(*cursor_))
+					++cursor_;
+			}
+			auto const length = value_tag::length_type(cursor_ - mark);
+			values_.emplace_back(value_type::number, mark, length);
+			return result::ok;
+		}
+		
+	}; // parser
+	
+	
 } // namespace jessy

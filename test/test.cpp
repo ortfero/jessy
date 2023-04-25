@@ -7,68 +7,115 @@
 
 TEST_SUITE("jessy") {
     
-    SCENARIO("empty string") {
-        auto const maybe_doc = jessy::document::read("");
-        REQUIRE(!maybe_doc);
+    SCENARIO("empty source") {
+		auto parser = jessy::parser{};
+        auto const parsed = parser.parse("");
+		REQUIRE_EQ(parsed, jessy::result::incomplete_json);
+		REQUIRE(parser.root()->is_null());
     }
     
     
     SCENARIO("null") {
-        auto const maybe_doc = jessy::document::read("null");
-        REQUIRE(maybe_doc);
-        REQUIRE(maybe_doc->root.is_null());
-        REQUIRE_EQ(maybe_doc->root.type(), jessy::value_type::null);
+		auto parser = jessy::parser{};
+        auto const parsed = parser.parse("null");
+        REQUIRE_EQ(parsed, jessy::result::ok);
+        REQUIRE(parser.root()->is_null());
     }
-    
-    
-    SCENARIO("object") {
-        auto const maybe_doc = jessy::document::read("{}");
-        REQUIRE(maybe_doc);
-        auto const root = maybe_doc->root;
-        REQUIRE(root.is_object());
-        REQUIRE_EQ(root.type(), jessy::value_type::object);
-        auto const y_val = root["y"];
-        REQUIRE(y_val.is_null());
+	
+	
+	SCENARIO("false") {
+		auto parser = jessy::parser{};
+        auto const parsed = parser.parse("false");
+        REQUIRE_EQ(parsed, jessy::result::ok);
+		auto const maybe_bool = parser.root()->as_bool();
+        REQUIRE(maybe_bool);
+		REQUIRE_EQ(*maybe_bool, false);
     }
-    
-    SCENARIO("int") {
-        auto const maybe_doc = jessy::document::read("{ \"x\": 42, \"y\": \"\" }");
-        REQUIRE(maybe_doc);
-        auto const x_val = maybe_doc->root["x"];        
-        REQUIRE_EQ(x_val.type(), jessy::value_type::uinteger);
-        auto const maybe_x = x_val.as_int();
-        REQUIRE(maybe_x);
-        REQUIRE_EQ(*maybe_x, 42);
-        auto const y_val = maybe_doc->root["y"];
-        REQUIRE_EQ(y_val.type(), jessy::value_type::string);
-        auto const maybe_y = y_val.as_int();
-        REQUIRE(!maybe_y);
+	
+	
+	SCENARIO("true") {
+		auto parser = jessy::parser{};
+        auto const parsed = parser.parse("true");
+        REQUIRE_EQ(parsed, jessy::result::ok);
+		auto const maybe_bool = parser.root()->as_bool();
+        REQUIRE(maybe_bool);
+		REQUIRE_EQ(*maybe_bool, true);
+    }
+	
+	
+	SCENARIO("int") {
+		auto parser = jessy::parser{};
+        auto const parsed = parser.parse("-314");
+		REQUIRE_EQ(parsed, jessy::result::ok);
+        auto const maybe_number = parser.root()->as_int();
+        REQUIRE(maybe_number);
+		REQUIRE_EQ(*maybe_number, -314ll);
     }
     
     
     SCENARIO("double") {
-        auto const maybe_doc = jessy::document::read("{ \"x\": 42.3 }");
-        REQUIRE(maybe_doc);
-        auto const x_val = maybe_doc->root["x"];
-        REQUIRE_EQ(x_val.type(), jessy::value_type::floating);        
-        auto const maybe_x = x_val.as_double();
-        REQUIRE(maybe_x);
-        REQUIRE_EQ(*maybe_x, 42.3);
+		auto parser = jessy::parser{};
+        auto const parsed = parser.parse("-3.14e+1");
+		REQUIRE_EQ(parsed, jessy::result::ok);
+        auto const maybe_number = parser.root()->as_double();
+        REQUIRE(maybe_number);
+		REQUIRE_EQ(*maybe_number, -31.4);
     }
-    
-    
-    SCENARIO("array") {
-        auto const maybe_doc = jessy::document::read("[ 1, 2, 3 ]");
-        REQUIRE(maybe_doc);
-        auto sum = 0;
-        for(auto const& v: maybe_doc->root) {
-            auto const maybe_int = v.as_int();
-            if(maybe_int)
-                sum += *maybe_int;
-        }
-        REQUIRE_EQ(sum, 6);
+	
+	
+	SCENARIO("string") {
+		auto parser = jessy::parser{};
+        auto const parsed = parser.parse("\"ok\"");
+		REQUIRE_EQ(parsed, jessy::result::ok);
+        auto const maybe_string = parser.root()->as_string();
+        REQUIRE(maybe_string);
+		REQUIRE_EQ(*maybe_string, "ok");
     }
-    
+	
+	SCENARIO("string with escapes") {
+		auto parser = jessy::parser{};
+        auto const parsed = parser.parse("\"ok\\r\\n\\b\\f\\u000D\\u000a\"");
+		REQUIRE_EQ(parsed, jessy::result::ok);
+        auto const maybe_string = parser.root()->as_string();
+        REQUIRE(maybe_string);
+		REQUIRE_EQ(*maybe_string, "ok\r\n\b\f\r\n");
+    }
+	
+	
+	SCENARIO("array") {
+		auto parser = jessy::parser{};
+        auto const parsed = parser.parse("[1, 2, 3]");
+		REQUIRE_EQ(parsed, jessy::result::ok);
+        auto const maybe_array = parser.root()->as_array();
+        REQUIRE(maybe_array);
+		auto const& array = *maybe_array;
+		REQUIRE_EQ(array.size(), 3);
+		auto it = array.begin();
+		REQUIRE_NE(it, array.end());
+		REQUIRE_EQ(*it->as_int(), 1);
+		++it;
+		REQUIRE_NE(it, array.end());
+		REQUIRE_EQ(*it->as_int(), 2);
+		++it;
+		REQUIRE_NE(it, array.end());
+		REQUIRE_EQ(*it->as_int(), 3);
+		++it;
+		REQUIRE_EQ(it, array.end());
+    }
+	
+	
+	SCENARIO("object") {
+		auto parser = jessy::parser{};
+        auto const parsed = parser.parse("{\"x\": 1, \"y\":3.14, \"z\":\"ok\"}");
+		REQUIRE_EQ(parsed, jessy::result::ok);
+        auto const maybe_object = parser.root()->as_object();
+        REQUIRE(maybe_object);
+		auto const& object = *maybe_object;
+		REQUIRE_EQ(object.size(), 3);
+		auto it = object.find(object.begin(), "x");
+		REQUIRE_NE(it, object.end());
+    }
+
 }
 
 
