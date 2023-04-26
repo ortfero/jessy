@@ -115,6 +115,20 @@ TEST_SUITE("jessy") {
 		auto it = object.find(object.begin(), "x");
 		REQUIRE_NE(it, object.end());
     }
+	
+	SCENARIO("multiline object") {
+		auto const text = R"(
+		{
+			"requestExpirationTime": 12345678,
+			"login": 30436013,
+			"balance": 9.9,
+			"comment": "test balance"
+		})";
+		auto parser = jessy::parser{};
+        auto const parsed = parser.parse(text);
+		REQUIRE_EQ(parsed, jessy::result::ok);
+	}
+
 
 }
 

@@ -13,7 +13,7 @@
 
 
 namespace jessy {
-	
+
 
 	enum class value_type: std::uint8_t {
 		null, boolean, number, string, object, array
@@ -494,12 +494,12 @@ namespace jessy {
 	private:
 	
 	
-		static bool is_digit(char c) {
+		static bool is_digit(char c) noexcept {
 			constexpr auto t = true;
 			constexpr auto f = false;
 			static constexpr bool map[] = {
 				 f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,
-				 f,f,f,f,f,f,f,f,f,f,t,t,t,t,t,t,t,t,t,t,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,
+				 f,f,f,f,f,f,f,f,f,f,f,t,t,t,t,t,t,t,t,t,t,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,
 				 f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,
 				 f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,
 				 f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,
@@ -540,7 +540,7 @@ namespace jessy {
 		}
 		
 		
-		char skip() {
+		char skip() noexcept {
 			constexpr auto t = true;
 			constexpr auto f = false;
 			static constexpr bool map[] = {
@@ -812,8 +812,10 @@ namespace jessy {
 				++cursor_;
 			if(*cursor_ == '.') {
 				++cursor_;
-				if(!is_digit(*cursor_))
+				if(!is_digit(*cursor_)) {
+					std::printf("No digit after point: %c\n", *cursor_);
 					return result::invalid_number;
+				}
 				++cursor_;
 				while(is_digit(*cursor_))
 					++cursor_;
@@ -823,8 +825,10 @@ namespace jessy {
 				if(*cursor_ == '+' || *cursor_ == '-') {
 					++cursor_;
 				}
-				if(!is_digit(*cursor_))
+				if(!is_digit(*cursor_)) {
+					std::printf("No digit after exponent\n");
 					return result::invalid_number;
+				}
 				while(is_digit(*cursor_))
 					++cursor_;
 			}
