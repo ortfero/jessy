@@ -15,7 +15,7 @@
 namespace jessy {
 	
 
-	enum class value_type: char {
+	enum class value_type: std::uint8_t {
 		null, boolean, number, string, object, array
 	}; // value_type
 	
@@ -39,36 +39,65 @@ namespace jessy {
 		}
 	}
 	
-	template<unsigned Bits> struct value_tag_bits;
 	
-	template<> struct value_tag_bits<4> {
+	class value_tag {
+		std::size_t tag_{0u};
 		
-		using length_type = std::uint32_t;
-		
-		value_type type:8;
-		length_type length:24;
-	}; // value_tag_bits<4>
-	static_assert(sizeof(value_tag_bits<4>) == 4, "value_tag_bits<4> should be 32 bits");
+	public:
 	
-	template<> struct value_tag_bits<8> {
+		using size_type = std::size_t;
 		
-		using length_type = std::uint64_t;
+		constexpr value_tag() = default;
+		constexpr value_tag(value_tag const&) = default;
+		constexpr value_tag& operator = (value_tag const&) = default;
 		
-		value_type type:8;
-		length_type length:56;
-	}; // value_tag_bits<8>
-	static_assert(sizeof(value_tag_bits<8>) == 8, "value_tag_bits<8> should be 64 bits");
-	
-	using value_tag = value_tag_bits<sizeof(std::size_t)>;
+		constexpr value_tag(value_type type) noexcept {
+			if constexpr(sizeof(size_type) == 4)
+				tag_ = size_type(type) << 24;
+			else
+				tag_ = size_type(type) << 56;
+		}
+		
+		
+		constexpr value_tag(value_type type, size_type length) noexcept {
+			if constexpr(sizeof(size_type) == 4)
+				tag_ = (size_type(type) << 24) | (length & 0x00FFFFFF);
+			else
+				tag_ = (size_type(type) << 56) | (length & 0x00FFFFFFFFFFFFFF);
+		}
+		
+		
+		constexpr value_type type() const noexcept {
+			if constexpr(sizeof(size_type) == 4)
+				return value_type(tag_ >> 24);
+			else
+				return value_type(tag_ >> 56);
+		}
+		
+		
+		constexpr size_type length() const noexcept {
+			if constexpr(sizeof(size_type) == 4)
+				return tag_ & 0x00FFFFFF;
+			else
+				return tag_ & 0x00FFFFFFFFFFFFFF;
+		}
+		
+		
+		constexpr void length(size_type n) noexcept {
+			if constexpr(sizeof(size_type) == 4)
+				tag_ |= (n & 0x00FFFFFF);
+			else
+				tag_ |= (n & 0x00FFFFFFFFFFFFFF);
+		}
+		
+	}; // value_tag
 	
 
 	union value_data {
 		
-		using count_type = value_tag::length_type;
-		
 		bool boolean;
 		char const* text;
-		count_type count;
+		value_tag::size_type count;
 		
 		constexpr value_data() noexcept: count{0} { }
 		constexpr value_data(bool value) noexcept: boolean{value} { }
@@ -80,13 +109,13 @@ namespace jessy {
 	class value {
 	friend class parser;
 	
-		value_tag tag_{value_type::null, 0u};
+		value_tag tag_;
 		value_data data_;
 		
 		static const value null;
 		
 		static value const* next_of(value const* it) noexcept {
-			switch(it->tag_.type) {
+			switch(it->tag_.type()) {
 				case value_type::array:
 				case value_type::object:
 					return it + it->data_.count + 1;
@@ -97,15 +126,17 @@ namespace jessy {
 		
 	public:
 	
+		using size_type = value_tag::size_type;
+	
 		class array {
 		friend class value;
 		
-			value_tag::length_type length_;
+			value_tag::size_type length_;
 			value const* begin_;
 			value const* end_;
 			
 		public:
-			using size_type = value_tag::length_type;
+			using size_type = value_tag::size_type;
 			
 			class const_iterator {
 			friend class array;
@@ -164,7 +195,7 @@ namespace jessy {
 			
 		private:
 		
-			array(value_tag::length_type length,
+			array(size_type length,
 			      value const* begin,
 				  value const* end) noexcept
 			: length_{length}, begin_{begin}, end_{end} { }
@@ -175,12 +206,12 @@ namespace jessy {
 		class object {
 		friend class value;
 		
-			value_tag::length_type length_;
+			value_tag::size_type length_;
 			value const* begin_;
 			value const* end_;
 			
 		public:
-			using size_type = value_tag::length_type;
+			using size_type = value_tag::size_type;
 			
 			class const_iterator {
 			friend class object;
@@ -201,7 +232,7 @@ namespace jessy {
 				
 				std::string_view key() const noexcept {
 					return std::string_view{key_->data_.text,
-					                        std::size_t(key_->tag_.length)};
+					                        key_->tag_.length()};
 				}
 				
 				value const& operator * () const noexcept {
@@ -248,7 +279,7 @@ namespace jessy {
 				auto const* it = from.key_;
 				while(it != end_) {
 					auto const key = std::string_view{it->data_.text,
-					                                  std::size_t(it->tag_.length)};
+					                                  it->tag_.length()};
 					if(key == name)
 						return const_iterator{it};
 					it = next_of(it + 1);
@@ -258,7 +289,7 @@ namespace jessy {
 				it = begin_;
 				while(it != from.key_) {
 					auto const key = std::string_view{it->data_.text,
-					                                  std::size_t(it->tag_.length)};
+					                                  it->tag_.length()};
 					if(key == name)
 						return const_iterator{it};
 					it = next_of(it + 1);
@@ -268,9 +299,9 @@ namespace jessy {
 			
 		private:
 		
-			object(value_tag::length_type length,
-			      value const* begin,
-				  value const* end) noexcept
+			object(size_type length,
+			       value const* begin,
+				   value const* end) noexcept
 			: length_{length}, begin_{begin}, end_{end} { }
 		}; // object
 	
@@ -279,47 +310,51 @@ namespace jessy {
 		constexpr value(value const&) = default;
 		constexpr value& operator = (value const&) = default;
 		
+		
 		constexpr value(bool v)
-		: tag_{value_type::boolean, 0u}, data_{v} { }
+		: tag_{value_type::boolean}, data_{v} { }
+		
 		
 		constexpr value(value_type type)
-		: tag_{type, 0u} { }
+		: tag_{type} { }
+		
 		
 		constexpr value(value_type type,
 		                char const* text,
-						value_tag::length_type length)
+						size_type length)
 		: tag_{type, length}, data_{text} { }
 		
-		constexpr void members_info(value_tag::length_type length,
-		                            value_data::count_type count) {
-			tag_.length = length;
+		
+		constexpr void members_info(size_type length,
+		                            size_type count) {
+			tag_.length(length);
 			data_.count = count;
 		}
 
 		
 		constexpr value_type type() const noexcept {
-			return tag_.type;
+			return tag_.type();
 		}
 		
 		
 		constexpr bool is_null() const noexcept {
-			return tag_.type == value_type::null;
+			return tag_.type() == value_type::null;
 		}		
 		
 		
 		std::optional<bool> as_bool() const noexcept {
-			if(tag_.type != value_type::boolean)
+			if(tag_.type() != value_type::boolean)
 				return std::nullopt;
 			return {data_.boolean};
 		}
 		
 		
 		std::optional<std::int64_t> as_int() const noexcept {
-			if(tag_.type != value_type::number)
+			if(tag_.type() != value_type::number)
 				return std::nullopt;
 			auto result = 0ll;
 			auto const converted = std::from_chars(data_.text,
-			                                       data_.text + tag_.length,
+			                                       data_.text + tag_.length(),
 												   result);
 			if(converted.ec != std::errc{})
 				return std::nullopt;
@@ -328,11 +363,11 @@ namespace jessy {
 		
 		
 		std::optional<std::uint64_t> as_uint() const noexcept {
-			if(tag_.type != value_type::number)
+			if(tag_.type() != value_type::number)
 				return std::nullopt;
 			auto result = 0ull;
 			auto const converted = std::from_chars(data_.text,
-			                                       data_.text + tag_.length,
+			                                       data_.text + tag_.length(),
 												   result);
 			if(converted.ec != std::errc{})
 				return std::nullopt;
@@ -341,11 +376,11 @@ namespace jessy {
 		
 		
 		std::optional<double> as_double() const noexcept {
-			if(tag_.type != value_type::number)
+			if(tag_.type() != value_type::number)
 				return std::nullopt;
 			auto result = 0.0;
 			auto const converted = std::from_chars(data_.text,
-			                                       data_.text + tag_.length,
+			                                       data_.text + tag_.length(),
 												   result);
 			if(converted.ec != std::errc{})
 				return std::nullopt;
@@ -354,22 +389,23 @@ namespace jessy {
 		
 		
 		std::optional<std::string_view> as_string() const noexcept {
-			if(tag_.type != value_type::string)
+			if(tag_.type() != value_type::string)
 				return std::nullopt;
-			return {std::string_view{data_.text, std::size_t(tag_.length)}};
+			return {std::string_view{data_.text, tag_.length()}};
 		}
 		
 		
 		std::optional<array> as_array() const noexcept {
-			if(tag_.type != value_type::array)
+			if(tag_.type() != value_type::array)
 				return std::nullopt;
-			return {array{tag_.length, this + 1, this + data_.count + 1}};
+			return {array{tag_.length(), this + 1, this + data_.count + 1}};
 		}
 		
+		
 		std::optional<object> as_object() const noexcept {
-			if(tag_.type != value_type::object)
+			if(tag_.type() != value_type::object)
 				return std::nullopt;
-			return {object{tag_.length, this + 1, this + data_.count + 1}};
+			return {object{tag_.length(), this + 1, this + data_.count + 1}};
 		}
 						
 	}; // value
@@ -527,7 +563,7 @@ namespace jessy {
 			values_.emplace_back(value_type::object);
 			auto const original_size = values_.size();
 			++cursor_;
-			auto length = value_tag::length_type(0);
+			auto length = size_type(0);
 			if(skip() != '}')
 				for(;;) {
 					if(*cursor_ != '\"')
@@ -561,7 +597,7 @@ namespace jessy {
 			values_.emplace_back(value_type::array);
 			auto const original_size = values_.size();
 			++cursor_;
-			auto length = value_tag::length_type(0);
+			auto length = size_type(0);
 			if(skip() != ']')				
 				for(;;) {
 					auto const e = parse_value();
@@ -596,7 +632,7 @@ namespace jessy {
 					case '"':
 						values_.emplace_back(value_type::string,
 						                     mark,
-											 value_tag::length_type(cursor_ - mark));
+											 size_type(cursor_ - mark));
 						++cursor_;
 						return result::ok;
 					default:
@@ -624,7 +660,7 @@ namespace jessy {
 					case '"':
 						values_.emplace_back(value_type::string,
 						                     mark,
-											 value_tag::length_type(p - mark));
+											 size_type(p - mark));
 						++cursor_;
 						return result::ok;
 					default:
@@ -792,7 +828,7 @@ namespace jessy {
 				while(is_digit(*cursor_))
 					++cursor_;
 			}
-			auto const length = value_tag::length_type(cursor_ - mark);
+			auto const length = size_type(cursor_ - mark);
 			values_.emplace_back(value_type::number, mark, length);
 			return result::ok;
 		}
