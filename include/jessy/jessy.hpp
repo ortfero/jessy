@@ -439,6 +439,7 @@ namespace jessy {
 		
 		
 		result parse(std::string_view text) {
+			values_.clear();
 			buffer_ = text;
 			cursor_ = buffer_.data();
 			return parse_value();
