@@ -424,6 +424,9 @@ namespace jessy {
 		parser() = default;
 		parser(parser const&) = default;
 		parser& operator = (parser const&) = default;
+		parser(parser&&) = default;
+		parser& operator = (parser&&) = default;
+		
 		
 		explicit parser(size_type reserve_tokens, size_type buffer_size) {
 			values_.reserve(reserve_tokens);
