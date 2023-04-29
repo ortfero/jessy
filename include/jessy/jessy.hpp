@@ -284,8 +284,6 @@ namespace jessy {
 						return const_iterator{it};
 					it = next_of(it + 1);
 				}
-				if(from.key_ == begin_)
-					return const_iterator{end_};
 				it = begin_;
 				while(it != from.key_) {
 					auto const key = std::string_view{it->data_.text,
