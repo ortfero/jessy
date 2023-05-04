@@ -116,6 +116,7 @@ TEST_SUITE("jessy") {
 		REQUIRE_NE(it, object.end());
     }
 	
+	
 	SCENARIO("multiline object") {
 		auto const text = R"(
 		{
@@ -128,6 +129,18 @@ TEST_SUITE("jessy") {
         auto const parsed = parser.parse(text);
 		REQUIRE_EQ(parsed, jessy::result::ok);
 	}
+	
+	
+	SCENARIO("find field at end") {
+		auto parser = jessy::parser{};
+        auto const parsed = parser.parse("{\"x\": 1}");
+		REQUIRE_EQ(parsed, jessy::result::ok);
+        auto const maybe_object = parser.root()->as_object();
+        REQUIRE(maybe_object);
+		auto const& object = *maybe_object;
+		auto it = object.find(object.end(), "x");
+		REQUIRE_NE(it, object.end());
+    }
 
 
 }
